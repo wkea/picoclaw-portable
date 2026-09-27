@@ -1,0 +1,11 @@
+# 打包产物，不入库（需要时用 Release 分发）
+dist/
+*.tar.gz
+
+# 预置密钥文件，绝不入库
+payload/security.yml
+.security.yml
+
+# 杂项
+.DS_Store
+*.swp
