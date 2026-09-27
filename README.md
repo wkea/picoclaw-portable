@@ -104,6 +104,46 @@ systemctl restart picoclaw
 
 或换模型：`picoclaw model`（`model_list` 里两个 DeepSeek 模型都已预置好，随时可切）。
 
+## 六、私有仓库分发（推荐）
+
+本仓库本身就在私有仓库里：**https://github.com/wkea/picoclaw-portable**
+
+### 目标服务器一键装（私有仓库需要 token）
+
+```bash
+TOKEN=ghp_你的token
+git clone https://$TOKEN@github.com/wkea/picoclaw-portable.git /tmp/pcp \
+  && bash /tmp/pcp/install.sh
+```
+
+装完记得清掉 `/tmp/pcp`（里面有 token 的 URL 会留在 `.git/config`）。
+
+### 更新仓库
+
+```bash
+GH_TOKEN=ghp_xxx bash publish.sh "说明这次改了什么"
+```
+
+`publish.sh` 会：构建产物 → **扫描暂存区是否有明文密钥（有就中止）** → 提交 → 推送。
+token 也可以放到 `~/.config/picoclaw/gh-token`（chmod 600）免得每次都输。
+
+### 自动发版（GitHub Actions）
+
+已在 `.github/workflows/release.yml` 配好。打 tag 即自动出安装包并挂到 Release：
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0   # 需 workflow 权限
+```
+
+产出两个附件：
+
+| 文件 | 说明 |
+|---|---|
+| `picoclaw-portable.tar.gz` | 轻量包（~40KB），安装时在线下载二进制 |
+| `picoclaw-portable-offline-x86_64.tar.gz` | 离线包（~23MB），内嵌 linux-x86_64 二进制 |
+
+CI 里也会做一次**密钥扫描**，产物含 `security.yml` 直接 fail。
+
 ---
 
 ## ⚠️ 安全须知
@@ -126,14 +166,17 @@ systemctl restart picoclaw
 ## 目录结构
 
 ```
-picoclaw-portable/
+picoclaw-portable/                      ← 私有仓库 git 根目录
 ├── build-portable.sh      # 打包脚本（构建机跑）
 ├── install.sh             # 安装脚本（目标服务器跑）
+├── publish.sh             # 构建 + 密钥扫描 + 推送到私有仓库
 ├── README.md
+├── .github/workflows/
+│   └── release.yml        # 打 tag 自动出安装包
 ├── payload/               # 被打包进去的预置数据
 │   ├── config.json        # 预置配置（workspace 用 __INSTALL_DIR__ 占位）
-│   ├── security.yml       # 可选：预置 Key（用 --key 时才有）
+│   ├── security.yml       # 可选：预置 Key（用 --key 时才有，已 gitignore）
 │   └── workspace/         # 人格文件 + 技能
-└── dist/                  # 产物
+└── dist/                  # 构建产物（已 gitignore）
     └── picoclaw-portable.tar.gz
 ```

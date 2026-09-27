@@ -35,12 +35,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-echo "[+] 源配置: $SRC_HOME/config.json"
-[ -f "$SRC_HOME/config.json" ] || { echo "[x] 找不到源 config.json，请先在此机器上 picoclaw onboard"; exit 1; }
-
 PAY="$SCRIPT_DIR/payload"
 mkdir -p "$PAY/workspace"
-rm -f "$PAY/security.yml"
+
+if [ "${REPACKAGE:-0}" = "1" ]; then
+  # CI / 无 PicoClaw 环境：完全沿用已有 payload，只负责重新打 tar 包
+  [ -f "$PAY/config.json" ] || { echo "[x] payload/config.json 不存在，无法 repackage"; exit 1; }
+  echo "[+] repackage 模式：沿用现有 payload/，不重新生成 config.json"
+else
+  rm -f "$PAY/security.yml"
+  echo "[+] 源配置: $SRC_HOME/config.json"
+  [ -f "$SRC_HOME/config.json" ] || { echo "[x] 找不到源 config.json，请先在此机器上 picoclaw onboard"; exit 1; }
 
 # ---- 1. 生成 config.json（workspace 用占位符，两个候选模型都预置好）
 python3 - "$SRC_HOME/config.json" "$PAY/config.json" "$PROVIDER" "$API_BASE" "$MODEL_1_ALIAS" "$MODEL_1_ID" "$MODEL_2_ALIAS" "$MODEL_2_ID" <<'PY'
@@ -94,6 +99,7 @@ if [ -d "$SRC_HOME/workspace/skills" ] && [ -n "$(ls -A "$SRC_HOME/workspace/ski
   cp -r "$SRC_HOME/workspace/skills/." "$PAY/workspace/skills/"
   echo "[+] 技能已带入: $(ls "$PAY/workspace/skills" | tr '\n' ' ')"
 fi
+fi   # ← 结束 repackage 分支
 
 # ---- 5. 打包
 NAME="picoclaw-portable"
