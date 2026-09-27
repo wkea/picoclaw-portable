@@ -1,98 +1,70 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  PicoClaw 一键安装（交互式）
+#  PicoClaw 便携版 · 一条命令装完就能用
 #
-#  安装流程：
-#    1) 输入 DeepSeek API Key
-#    2) 选择模型  1) deepseek-flash（默认）  2) deepseek-v4-pro
-#    3) 自动安装（二进制 / 配置 / 密钥 / 服务）
-#    4) 装完输入  niko  即进入聊天
+#  它做什么
+#    1) 自动下载 picoclaw 官方二进制（不需要 root）
+#    2) 问你 DeepSeek API Key（输入不回显）
+#    3) 让你选一个模型（直接回车 = 默认）
+#    4) 全部装进一个目录，生成 ./niko，直接开聊
 #
-#  用法:
-#    bash install.sh                                            # 交互式（推荐）
-#    DEEPSEEK_API_KEY=sk-xxx MODEL_CHOICE=1 bash install.sh     # 全自动免交互
-#    INSTALL_DIR=/data/picoclaw bash install.sh                 # 自定义目录
-#    GH_PROXY=https://ghproxy.net/ bash install.sh              # 国内下载加速
-#    NO_SERVICE=1 bash install.sh                               # 不装 systemd 服务
+#  一条命令
+#    curl -fsSL https://raw.githubusercontent.com/wkea/picoclaw-portable/main/install.sh | bash
 #
-#  离线安装: 把 picoclaw 二进制放到本脚本同目录，脚本会优先使用它
+#  装到哪     默认 $HOME/picoclaw     （INSTALL_DIR=/data/pc 可改）
+#  便携       整个目录拷到另一台同架构机器，./niko 直接可用，零依赖
+#  免交互     DEEPSEEK_API_KEY=sk-xxx MODEL_CHOICE=1 bash install.sh
+#  国内加速   GH_PROXY=https://ghproxy.net/ bash install.sh
+#  加进 PATH  LINK=1 bash install.sh   （把 niko / pc 软链到 ~/.local/bin）
 # ============================================================================
 set -euo pipefail
 
 PICOCLAW_VERSION="${PICOCLAW_VERSION:-0.3.1}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/picoclaw}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/picoclaw}"
 GH_PROXY="${GH_PROXY:-}"
-NO_SERVICE="${NO_SERVICE:-0}"
-SERVICE_NAME="picoclaw"
+LINK="${LINK:-0}"
 
 # ---- 模型菜单（改这里即可增删选项） ----------------------------------------
 PROVIDER="deepseek"
 API_BASE="https://api.deepseek.com/v1"
-# 显示名 | config 里的 model_name | 真正发给 API 的 model id
+# 显示名 | config 里的 model_name | 发给 API 的 model id
 MODEL_1_LABEL="deepseek-flash";  MODEL_1_ALIAS="deepseek-v4-flash"; MODEL_1_ID="deepseek-v4-flash"
 MODEL_2_LABEL="deepseek-v4-pro"; MODEL_2_ALIAS="deepseek-v4-pro";   MODEL_2_ID="deepseek-v4-pro"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PAYLOAD="$SCRIPT_DIR/payload"
-
 C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_DIM=$'\033[2m'; C_0=$'\033[0m'
-log()  { printf '%s[+]%s %s\n' "$C_OK" "$C_0" "$*"; }
-warn() { printf '%s[!]%s %s\n' "$C_WARN" "$C_0" "$*"; }
+log()  { printf '%s[+]%s %s\n' "$C_OK" "$C_0" "$*" >&2; }
+warn() { printf '%s[!]%s %s\n' "$C_WARN" "$C_0" "$*" >&2; }
 die()  { printf '%s[x]%s %s\n' "$C_ERR" "$C_0" "$*" >&2; exit 1; }
 
-# 交互输入：优先走 /dev/tty，这样  curl | bash  也能正常提问
+# 交互输入走 /dev/tty，这样 curl | bash 也能正常提问
 if [ -r /dev/tty ]; then TTY=/dev/tty; else TTY=""; fi
-p() { printf '%s' "$*" >&2; }
-ask() {  # ask <提示>  → 结果放 $REPLY
+ask() {  # ask <提示> → $REPLY
   if [ -n "$TTY" ]; then IFS= read -r -p "$1" REPLY <"$TTY" || true
   else                    IFS= read -r -p "$1" REPLY || true; fi
 }
-ask_secret() {  # ask_secret <提示>  → 回显关闭，结果放 $REPLY
+ask_secret() {  # 不回显
   if [ -n "$TTY" ]; then IFS= read -r -s -p "$1" REPLY <"$TTY" || true; echo >&2
   else                    IFS= read -r -s -p "$1" REPLY || true; echo >&2; fi
 }
 
-[ "$(id -u)" -eq 0 ] || die "请用 root 运行（sudo bash install.sh）"
-
 # ============================================================ 0. 交互收集
-echo >&2
-printf '%s════════════════════════════════════════════════════════════%s\n' "$C_DIM" "$C_0" >&2
-printf '  %sPicoClaw 安装向导%s\n' "$C_OK" "$C_0" >&2
-printf '%s════════════════════════════════════════════════════════════%s\n' "$C_DIM" "$C_0" >&2
-echo >&2
-
-PRESET_KEY=""
-[ -f "$PAYLOAD/security.yml" ] && PRESET_KEY="yes"
+printf '\n%s────────────────────────────────────────────────────────────%s\n' "$C_DIM" "$C_0" >&2
+printf '  %sPicoClaw 便携版安装%s\n' "$C_OK" "$C_0" >&2
+printf '%s────────────────────────────────────────────────────────────%s\n\n' "$C_DIM" "$C_0" >&2
 
 # ---- (1) API Key ------------------------------------------------------------
 API_KEY="${DEEPSEEK_API_KEY:-}"
 if [ -z "$API_KEY" ]; then
-  if [ -n "$PRESET_KEY" ]; then
-    echo >&2 "  ${C_DIM}本安装包内已预置了一个 Key。${C_0}"
-    ask "  [1/2] DeepSeek API Key（直接回车沿用包内预置）: "
-    case "$REPLY" in
-      "") API_KEY="__USE_PRESET__" ;;
-      *)  API_KEY="$REPLY" ;;
-    esac
-    echo >&2
-  else
-    while [ -z "$API_KEY" ]; do
-      echo >&2 "  ${C_DIM}提示：在 platform.deepseek.com → API Keys 里创建，形如 sk-xxxxxxxx${C_0}"
-      ask_secret "  [1/2] 请输入 DeepSeek API Key: "
-      API_KEY="$(printf '%s' "$REPLY" | tr -d '[:space:]')"
-      [ -z "$API_KEY" ] && warn "不能为空，请重新输入"
-    done
-    echo >&2
-  fi
+  echo >&2 "  ${C_DIM}在 platform.deepseek.com → API Keys 创建，形如 sk-xxxxxxxx${C_0}"
+  while [ -z "$API_KEY" ]; do
+    ask_secret "  [1/2] 请输入 DeepSeek API Key: "
+    API_KEY="$(printf '%s' "$REPLY" | tr -d '[:space:]')"
+    [ -z "$API_KEY" ] && warn "不能为空，请重新输入"
+  done
 fi
-[ -n "$API_KEY" ] || die "API Key 不能为空"
+echo >&2
 
 # ---- (2) 模型选择 -----------------------------------------------------------
-ALIAS=""; MODEL_ID=""
-if [ "$API_KEY" = "__USE_PRESET__" ]; then
-  : # 沿用预置包时模型由包决定，稍后从 payload 里读
-fi
-
 CHOICE="${MODEL_CHOICE:-}"
 if [ -z "$CHOICE" ]; then
   echo >&2 "  [2/2] 请选择模型："
@@ -100,217 +72,161 @@ if [ -z "$CHOICE" ]; then
   printf '        %s2)%s %-16s 推理更强\n' "$C_OK" "$C_0" "$MODEL_2_LABEL" >&2
   ask "        输入 1 或 2（直接回车 = 1）: "
   CHOICE="${REPLY:-1}"
-  echo >&2
 fi
-
 case "$CHOICE" in
-  1|"$MODEL_1_LABEL"|"$MODEL_1_ALIAS") ALIAS="$MODEL_1_ALIAS"; MODEL_ID="$MODEL_1_ID"; NICE="$MODEL_1_LABEL" ;;
   2|"$MODEL_2_LABEL"|"$MODEL_2_ALIAS") ALIAS="$MODEL_2_ALIAS"; MODEL_ID="$MODEL_2_ID"; NICE="$MODEL_2_LABEL" ;;
-  *) warn "无法识别的选项 '$CHOICE'，回退到默认 $MODEL_1_LABEL"; ALIAS="$MODEL_1_ALIAS"; MODEL_ID="$MODEL_1_ID"; NICE="$MODEL_1_LABEL" ;;
+  *)                                   ALIAS="$MODEL_1_ALIAS"; MODEL_ID="$MODEL_1_ID"; NICE="$MODEL_1_LABEL" ;;
 esac
+log "Key 已接收（${#API_KEY} 字符），模型：$NICE"
 
-if [ "$API_KEY" = "__USE_PRESET__" ]; then
-  log "沿用包内预置 Key，模型: $NICE"
-else
-  log "API Key 已接收（${#API_KEY} 字符），模型: $NICE"
-fi
-
-# ============================================================ 1. 识别平台
+# ============================================================ 1. 平台识别
 case "$(uname -s)" in
   Linux)  OS=Linux  ;;
   Darwin) OS=Darwin ;;
-  *) die "暂不支持的系统: $(uname -s)" ;;
+  *) die "暂不支持的系统: $(uname -s)（Linux / macOS）" ;;
 esac
 case "$(uname -m)" in
-  x86_64|amd64)   ARCH=x86_64   ;;
-  aarch64|arm64)  ARCH=arm64    ;;
-  armv7l|armv7)   ARCH=armv7    ;;
-  armv6l|armv6)   ARCH=armv6    ;;
-  riscv64)        ARCH=riscv64  ;;
-  loongarch64)    ARCH=loong64  ;;
-  mips*)          ARCH=mipsle   ;;
+  x86_64|amd64)  ARCH=x86_64  ;;
+  aarch64|arm64) ARCH=arm64   ;;
+  armv7l|armv7)  ARCH=armv7   ;;
+  armv6l|armv6)  ARCH=armv6   ;;
+  riscv64)       ARCH=riscv64 ;;
+  loongarch64)   ARCH=loong64 ;;
+  mips*)         ARCH=mipsle  ;;
   *) die "未知架构: $(uname -m)" ;;
 esac
-log "平台: ${OS}_${ARCH}   安装目录: ${INSTALL_DIR}"
+log "平台 ${OS}_${ARCH}   安装目录 ${INSTALL_DIR}"
 
-# ============================================================ 2. 目录结构
-mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/workspace"
+# ============================================================ 2. 目录
+mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/logs"
+CFG="$INSTALL_DIR/config.json"
+SEC="$INSTALL_DIR/.security.yml"
+BIN="$INSTALL_DIR/bin/picoclaw"
 
 # ============================================================ 3. 获取二进制
-TARGET_BIN="$INSTALL_DIR/bin/picoclaw"
-if [ -x "$SCRIPT_DIR/picoclaw" ]; then
-  log "使用随包二进制（离线模式）"
-  install -m 0755 "$SCRIPT_DIR/picoclaw" "$TARGET_BIN"
+if [ -x "$BIN" ]; then
+  log "二进制已存在，跳过下载（重装只更新配置）"
 else
   PKG="picoclaw_${OS}_${ARCH}.tar.gz"
   BASE="https://github.com/sipeed/picoclaw/releases/download/v${PICOCLAW_VERSION}"
   URL="${GH_PROXY}${BASE}/${PKG}"
-  TMP="$(mktemp -d)"
-  trap 'rm -rf "$TMP"' EXIT
-  log "下载: $URL"
+  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+  log "下载 $URL"
   curl -fL --retry 3 --connect-timeout 15 -o "$TMP/p.tar.gz" "$URL" \
-    || die "下载失败。国内可试: GH_PROXY=https://ghproxy.net/ bash install.sh"
-
+    || die "下载失败。国内可试：GH_PROXY=https://ghproxy.net/ bash install.sh"
   if curl -fsL --connect-timeout 10 -o "$TMP/sums.txt" "${GH_PROXY}${BASE}/picoclaw_${PICOCLAW_VERSION}_checksums.txt" 2>/dev/null; then
     ( cd "$TMP" && EXPECT="$(awk -v f="$PKG" '$2==f{print $1}' sums.txt)" \
-      && [ -n "$EXPECT" ] \
-      && echo "$EXPECT  p.tar.gz" | sha256sum -c - >/dev/null \
-      && log "sha256 校验通过" ) || die "sha256 校验失败，已中止"
+      && [ -n "$EXPECT" ] && echo "$EXPECT  p.tar.gz" | sha256sum -c - >/dev/null ) \
+      || die "sha256 校验失败，已中止"
+    log "sha256 校验通过"
   else
-    warn "跳过 sha256 校验（checksums 未取到）"
+    warn "未取到 checksums，跳过 sha256 校验"
   fi
-
   tar xzf "$TMP/p.tar.gz" -C "$TMP"
-  BIN_SRC="$(find "$TMP" -maxdepth 2 -type f -name picoclaw | head -1)"
-  [ -n "$BIN_SRC" ] || die "压缩包内未找到 picoclaw 可执行文件"
-  install -m 0755 "$BIN_SRC" "$TARGET_BIN"
+  SRC="$(find "$TMP" -maxdepth 2 -type f -name picoclaw | head -1)"
+  [ -n "$SRC" ] || die "压缩包内未找到 picoclaw"
+  install -m 0755 "$SRC" "$BIN"
 fi
-log "二进制就位: $TARGET_BIN"
-"$TARGET_BIN" version 2>/dev/null || true
+"$BIN" version 2>/dev/null | head -1 >&2 || true
 
-# ============================================================ 4. 写 config.json
-CFG="$INSTALL_DIR/config.json"
-if [ -f "$PAYLOAD/config.json" ]; then
-  sed "s|__INSTALL_DIR__|${INSTALL_DIR}|g" "$PAYLOAD/config.json" > "$CFG"
-else
-  warn "payload/config.json 缺失，生成最小配置"
-  cat > "$CFG" <<EOF
-{
-  "version": 3,
-  "agents": { "defaults": {
-    "workspace": "${INSTALL_DIR}/workspace",
-    "provider": "${PROVIDER}",
-    "model_name": "${ALIAS}",
-    "max_tokens": 32768,
-    "max_tool_iterations": 50
-  } },
-  "model_list": [
-    { "model_name": "${MODEL_1_ALIAS}", "provider": "${PROVIDER}", "model": "${MODEL_1_ID}", "api_base": "${API_BASE}" },
-    { "model_name": "${MODEL_2_ALIAS}", "provider": "${PROVIDER}", "model": "${MODEL_2_ID}", "api_base": "${API_BASE}" }
-  ]
-}
-EOF
+# ============================================================ 4. 生成 workspace / 默认配置
+if [ ! -f "$CFG" ]; then
+  log "初始化 workspace 与默认配置"
+  PICOCLAW_HOME="$INSTALL_DIR" "$BIN" onboard >/dev/null 2>&1 || true
 fi
+[ -f "$CFG" ] || die "配置生成失败（$CFG）"
+mkdir -p "$INSTALL_DIR/workspace/skills" "$INSTALL_DIR/workspace/memory"
 
-# 4a. 把默认 provider / model_name 改成用户选的（只改第一处 = agents.defaults）
+# 4a. 默认 provider / model_name / workspace（只改第一处 = agents.defaults）
+#     workspace 留空 → 自动解析为 $PICOCLAW_HOME/workspace，整个目录可搬迁
 awk -v prov="$PROVIDER" -v alias="$ALIAS" '
   {
-    if (!p && $0 ~ /"provider"[[:space:]]*:/)   { sub(/"provider"[[:space:]]*:[[:space:]]*"[^"]*"/,   "\"provider\": \""   prov  "\""); p=1 }
-    else if (!m && $0 ~ /"model_name"[[:space:]]*:/) { sub(/"model_name"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"model_name\": \"" alias "\""); m=1 }
+    if (!w && $0 ~ /"workspace"[[:space:]]*:/)   { sub(/"workspace"[[:space:]]*:[[:space:]]*"[^"]*"/,   "\"workspace\": \"\""); w=1 }
+    if (!p && $0 ~ /"provider"[[:space:]]*:/)     { sub(/"provider"[[:space:]]*:[[:space:]]*"[^"]*"/,     "\"provider\": \""     prov  "\""); p=1 }
+    if (!m && $0 ~ /"model_name"[[:space:]]*:/)   { sub(/"model_name"[[:space:]]*:[[:space:]]*"[^"]*"/,   "\"model_name\": \""   alias "\""); m=1 }
     print
   }' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
 
-# 4b. 如果 model_list 里没有这个模型，插到数组开头（作为第一个元素，天然合法）
-if ! grep -q "\"model_name\"[[:space:]]*:[[:space:]]*\"${ALIAS}\"" "$CFG"; then
+# 4b. model_list 里若没有该模型，插到数组开头（首元素，天然合法 JSON）
+#     注意：必须在 model_list 数组范围内判断，否则会误命中 agents.defaults 里的同名项
+if ! awk -v a="\"${ALIAS}\"" '
+      /"model_list"[[:space:]]*:[[:space:]]*\[/ { inml=1 }
+      inml && $0 ~ /"model_name"/ && index($0,a) { found=1 }
+      END { exit(found?0:1) }' "$CFG"; then
   ENTRY="    { \"model_name\": \"${ALIAS}\", \"provider\": \"${PROVIDER}\", \"model\": \"${MODEL_ID}\", \"api_base\": \"${API_BASE}\" },"
   awk -v e="$ENTRY" '{ print; if (!d && /"model_list"[[:space:]]*:[[:space:]]*\[/) { print e; d=1 } }' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
-  log "model_list 新增模型: $ALIAS"
+  log "model_list 新增模型 $ALIAS"
 fi
+log "配置就位（默认模型 = $ALIAS）"
 
-chmod 600 "$CFG"
-log "配置文件就位: $CFG  (默认模型 = $ALIAS)"
-
-# ============================================================ 5. 写 .security.yml
-SEC="$INSTALL_DIR/.security.yml"
+# ============================================================ 5. 写密钥
 umask 077
-if [ "$API_KEY" = "__USE_PRESET__" ]; then
-  install -m 600 "$PAYLOAD/security.yml" "$SEC"
-  log "已沿用包内预置 .security.yml"
-else
-  KEY_ESC="$(printf '%s' "$API_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  cat > "$SEC" <<EOF
-# PicoClaw 密钥 —— 由 install.sh 自动生成（$(date '+%Y-%m-%d %H:%M:%S')）
-# 换 Key：改这里，然后  systemctl restart ${SERVICE_NAME}
+KEY_ESC="$(printf '%s' "$API_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+cat > "$SEC.new" <<EOF
+# PicoClaw 密钥 —— 由 install.sh 生成（$(date '+%Y-%m-%d %H:%M:%S')）
+# 换 Key：改这里即可，无需重启任何服务
 model_list:
   ${ALIAS}:
     api_keys:
       - "${KEY_ESC}"
 EOF
-  log "密钥已写入 .security.yml（权限 600）"
-fi
-chmod 600 "$SEC" 2>/dev/null || true
+chmod 600 "$SEC.new" 2>/dev/null || true
+mv "$SEC.new" "$SEC"
 umask 022
+log "密钥已写入 .security.yml（权限 600）"
 
-# ============================================================ 6. 播种 workspace
-if [ -d "$PAYLOAD/workspace" ]; then
-  log "初始化 workspace"
-  cp -rn "$PAYLOAD/workspace/." "$INSTALL_DIR/workspace/" 2>/dev/null || true
-fi
-mkdir -p "$INSTALL_DIR/workspace/skills" "$INSTALL_DIR/workspace/memory" "$INSTALL_DIR/logs"
-
-# ============================================================ 7. 命令 & 环境变量
-ln -sf "$TARGET_BIN" /usr/local/bin/picoclaw
-cat > /etc/profile.d/picoclaw.sh <<EOF
-export PICOCLAW_HOME="${INSTALL_DIR}"
-export PATH="\$PATH:${INSTALL_DIR}/bin"
-EOF
-log "已生成 /etc/profile.d/picoclaw.sh  (PICOCLAW_HOME=${INSTALL_DIR})"
-
-# 7a. niko —— 一键进入聊天
-cat > /usr/local/bin/niko <<EOF
+# ============================================================ 6. 生成便携启动命令
+# niko：进入聊天；pc：其它子命令。都自己定位所在目录 → 整个目录可任意搬迁
+cat > "$INSTALL_DIR/niko" <<'EOF'
 #!/usr/bin/env bash
-# niko —— 进入 PicoClaw 聊天（由 install.sh 生成）
-export PICOCLAW_HOME="${INSTALL_DIR}"
-exec "${TARGET_BIN}" agent "\$@"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+export PICOCLAW_HOME="$SELF"
+exec "$SELF/bin/picoclaw" agent "$@"
 EOF
-chmod 0755 /usr/local/bin/niko
-log "已安装命令: niko  (输入 niko 即进入聊天，niko -m '你好' 单次提问)"
-
-# ============================================================ 8. systemd 服务
-if [ "$NO_SERVICE" != "1" ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-  log "安装 systemd 服务: ${SERVICE_NAME}"
-  cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
-[Unit]
-Description=PicoClaw Gateway (portable)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Environment=PICOCLAW_HOME=${INSTALL_DIR}
-ExecStart=${TARGET_BIN} gateway
-Restart=always
-RestartSec=5
-WorkingDirectory=${INSTALL_DIR}
-
-[Install]
-WantedBy=multi-user.target
+cat > "$INSTALL_DIR/pc" <<'EOF'
+#!/usr/bin/env bash
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+export PICOCLAW_HOME="$SELF"
+exec "$SELF/bin/picoclaw" "$@"
 EOF
-  systemctl daemon-reload
-  systemctl enable --now "${SERVICE_NAME}" >/dev/null 2>&1 || warn "服务启动失败，稍后手动检查"
-  log "服务状态: $(systemctl is-active ${SERVICE_NAME} 2>/dev/null || echo unknown)"
+chmod 0755 "$INSTALL_DIR/niko" "$INSTALL_DIR/pc" 2>/dev/null || true
+
+# 可选：软链到 ~/.local/bin
+if [ "$LINK" = "1" ]; then
+  L="$HOME/.local/bin"; mkdir -p "$L"
+  ln -sf "$INSTALL_DIR/niko" "$L/niko"
+  ln -sf "$INSTALL_DIR/pc"   "$L/pc"
+  log "已软链到 $L（确保该目录在 PATH 里）"
+fi
+
+# ============================================================ 7. 冒烟测试
+echo >&2
+if PICOCLAW_HOME="$INSTALL_DIR" timeout 90 "$BIN" agent -m "ping, reply with OK only" >/dev/null 2>&1; then OK=1; else OK=0; fi
+echo >&2
+
+# ============================================================ 8. 完成
+printf '%s────────────────────────────────────────────────────────────%s\n' "$C_DIM" "$C_0" >&2
+if [ "$OK" = "1" ]; then
+  printf '  %s安装完成 ✅%s   模型：%s\n' "$C_OK" "$C_0" "$NICE" >&2
 else
-  warn "未检测到 systemd，跳过服务安装（可手动运行: PICOCLAW_HOME=${INSTALL_DIR} picoclaw gateway）"
+  printf '  %s安装完成%s（模型没测通，多半是 Key 或网络）\n' "$C_WARN" "$C_0" >&2
+  printf '   · 换个 Key：编辑 %s 后重跑\n' "$SEC" >&2
+  printf '   · 网络不通：确认能访问 api.deepseek.com\n' >&2
 fi
-
-# ============================================================ 9. 冒烟测试
+printf '%s────────────────────────────────────────────────────────────%s\n' "$C_DIM" "$C_0" >&2
 echo >&2
-log "===== 冒烟测试（真实调用一次 ${NICE}）====="
-export PICOCLAW_HOME="$INSTALL_DIR"
-SMOKE_OK=0
-if timeout 90 "$TARGET_BIN" agent -m "ping, reply with OK only" 2>&1 | tail -5; then
-  SMOKE_OK=1
-fi
-echo >&2
-
-if [ "$SMOKE_OK" = "1" ]; then
-  log "模型调用成功 ✅"
+if [ "$LINK" = "1" ]; then
+  NIKO="niko"; PC="pc"
 else
-  warn "模型调用未成功。常见原因："
-  echo "      · Key 无效或余额不足 → 改 ${SEC} 后 systemctl restart ${SERVICE_NAME}" >&2
-  echo "      · 网络不通/deepseek 不可达 → 检查出网" >&2
+  NIKO="$INSTALL_DIR/niko"; PC="$INSTALL_DIR/pc"
 fi
-
-echo >&2
-printf '%s════════════════════════════════════════════════════════════%s\n' "$C_DIM" "$C_0" >&2
-printf '  %s安装完成 ✅%s   默认模型: %s\n' "$C_OK" "$C_0" "$NICE" >&2
-printf '%s════════════════════════════════════════════════════════════%s\n' "$C_DIM" "$C_0" >&2
-echo >&2
-printf '  现在输入：  %sniko%s   → 进入聊天\n' "$C_OK" "$C_0" >&2
-echo >&2
-echo "  其他命令:" >&2
-echo "    niko -m '你好'            # 单次提问" >&2
-echo "    picoclaw status           # 查看配置与模型" >&2
-echo "    picoclaw model            # 切换模型" >&2
-echo "    systemctl status ${SERVICE_NAME}   # 后台服务" >&2
-echo >&2
+printf '  现在输入：  %s%s%s   → 进入聊天\n\n' "$C_OK" "$NIKO" "$C_0" >&2
+{
+  echo "  常用："
+  echo "    $NIKO                # 进入聊天"
+  echo "    $NIKO -m '你好'       # 单次提问"
+  echo "    $PC status           # 查看配置与模型"
+  echo "    $PC model            # 切换模型"
+  echo
+  echo "  便携：整个目录（${INSTALL_DIR}）拷到另一台同架构机器，运行里面的 niko 即可。"
+} >&2
