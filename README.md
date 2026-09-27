@@ -118,6 +118,11 @@ DEEPSEEK_API_KEY=sk-xxx MODEL_CHOICE=1 bash install.sh
 GH_PROXY=https://ghproxy.net/ INSTALL_DIR=/data/pc LINK=1 bash install.sh
 ```
 
+> [!NOTE]
+> 若 `$HOME/picoclaw` 已存在且**是个文件**（常见于手动下载过 picoclaw 二进制），
+> 安装脚本不会改动它，会自动改装到 `$HOME/picoclaw-portable` 并提示；
+> 若你**显式指定**的 `INSTALL_DIR` 是个文件，则会明确报错并告诉你换个路径。
+
 ---
 
 ## 📁 目录结构
