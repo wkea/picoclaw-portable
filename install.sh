@@ -12,6 +12,7 @@
 #    curl -fsSL https://raw.githubusercontent.com/wkea/picoclaw-portable/main/install.sh | bash
 #
 #  装到哪     默认 $HOME/picoclaw     （INSTALL_DIR=/data/pc 可改）
+#             若该路径已被同名文件占用，自动改用 $HOME/picoclaw-portable
 #  便携       整个目录拷到另一台同架构机器，./niko 直接可用，零依赖
 #  免交互     DEEPSEEK_API_KEY=sk-xxx MODEL_CHOICE=1 bash install.sh
 #  国内加速   GH_PROXY=https://ghproxy.net/ bash install.sh
@@ -20,9 +21,12 @@
 set -euo pipefail
 
 PICOCLAW_VERSION="${PICOCLAW_VERSION:-0.3.1}"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/picoclaw}"
 GH_PROXY="${GH_PROXY:-}"
 LINK="${LINK:-0}"
+
+# 安装目录：未显式指定则用默认值，并记住是不是用户指定的
+if [ -n "${INSTALL_DIR:-}" ]; then INSTALL_DIR_SET=1; else INSTALL_DIR_SET=0; INSTALL_DIR="$HOME/picoclaw"; fi
+
 
 # ---- 模型菜单（改这里即可增删选项） ----------------------------------------
 PROVIDER="deepseek"
@@ -51,6 +55,26 @@ ask_secret() {  # 不回显
 printf '\n%s────────────────────────────────────────────────────────────%s\n' "$C_DIM" "$C_0" >&2
 printf '  %sPicoClaw 便携版安装%s\n' "$C_OK" "$C_0" >&2
 printf '%s────────────────────────────────────────────────────────────%s\n\n' "$C_DIM" "$C_0" >&2
+
+# ---- (0) 安装目录可用性 ------------------------------------------------------
+# $HOME/picoclaw 常被"手动下载的 picoclaw 二进制"占成一个普通文件，
+# 那时 mkdir 会直接失败。这里自动让路，保证"一条命令"仍然装得下去。
+if [ -e "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR" ]; then
+  if [ "$INSTALL_DIR_SET" = "1" ]; then
+    die "安装目录被同名文件占用：$INSTALL_DIR
+      换个路径即可，例如：
+      INSTALL_DIR=\"\$HOME/picoclaw-app\" bash install.sh"
+  fi
+  ALT="${INSTALL_DIR}-portable"
+  if [ -e "$ALT" ] && [ ! -d "$ALT" ]; then
+    die "安装目录均被同名文件占用：$INSTALL_DIR 、$ALT
+      请显式指定，例如：
+      INSTALL_DIR=\"\$HOME/picoclaw-app\" bash install.sh"
+  fi
+  warn "$INSTALL_DIR 是一个文件（多半是手动下载的 picoclaw 二进制），未改动它"
+  warn "本次改装到：$ALT"
+  INSTALL_DIR="$ALT"
+fi
 
 # ---- (1) API Key ------------------------------------------------------------
 API_KEY="${DEEPSEEK_API_KEY:-}"
