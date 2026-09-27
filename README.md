@@ -7,7 +7,7 @@
 不用 root，不碰系统目录，不装服务 —— 全部塞进一个文件夹，拷哪跑哪。
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-2f81f7)](#-环境要求)
-[![Shell](https://img.shields.io/badge/shell-bash-89e051?logo=gnubash&logoColor=white)](#-一键安装)
+[![Shell](https://img.shields.io/badge/shell-bash-89e051?logo=gnubash&logoColor=white)](#-快速开始)
 [![Arch](https://img.shields.io/badge/arch-x86__64%20%7C%20arm64%20%7C%20armv7%20%7C%20riscv64-8b949e)](#-环境要求)
 [![Powered by PicoClaw](https://img.shields.io/badge/powered%20by-PicoClaw%20v0.3.1-e06c8a)](https://github.com/sipeed/picoclaw)
 [![No Root](https://img.shields.io/badge/root-not%20required-3fb950)](#-为什么用它)
